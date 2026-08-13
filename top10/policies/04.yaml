@@ -1,0 +1,17 @@
+version: "1.0"
+name: output-content-safety
+description: Generated output content safety policy for the Agent Framework communications demo.
+terms: []
+
+defaults:
+  action: allow
+
+rules:
+  - name: block-unsafe-generated-output
+    condition:
+      field: output_text
+      operator: matches
+      value: (?i)(self-harm|hate speech|malware|credential theft|violent threat)
+    action: deny
+    priority: 100
+    message: Generated output failed the content safety policy.

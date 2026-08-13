@@ -1,0 +1,11 @@
+version: "1.0"
+name: prompt-injection-guard
+description: Prompt injection detection for the Agent Framework RAG demo.
+disclaimer: >
+  AGT's built-in patterns are sample defenses and are not comprehensive
+  production protection.
+
+sensitivity: balanced
+
+# Empty categories tell AGT v4.1 to use all built-in detection patterns.
+detection_patterns: {}

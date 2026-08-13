@@ -1,0 +1,8 @@
+version: "1.0"
+name: autonomous-action-budget
+description: Autonomous action budget for the Agent Framework expense demo.
+
+action_budget:
+  tool_name: expense_action
+  max_tool_calls: 3
+  exceeded_message: Autonomous action budget exceeded; human approval required.

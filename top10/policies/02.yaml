@@ -1,0 +1,6 @@
+version: "1.0"
+name: maximum-agent-execution-duration
+description: Maximum duration for each Agent Framework execution.
+
+execution_timeout:
+  max_duration_seconds: 25

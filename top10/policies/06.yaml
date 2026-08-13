@@ -1,0 +1,18 @@
+version: "1.0"
+name: sensitive-data-egress
+description: Data-classification policy for external ticketing egress.
+disclaimer: >
+  Pattern-based detection is sample protection and must be extended with
+  production data-protection controls.
+
+egress_policy:
+  agent_id: did:example:service-desk-agent
+  max_classification: INTERNAL
+  denied_categories:
+    - PII
+    - PHI
+    - PCI
+    - CREDENTIAL
+
+redaction:
+  placeholder: "[REDACTED]"

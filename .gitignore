@@ -1,0 +1,35 @@
+# Secrets and local environment files
+.env
+.env.*
+!.env.example
+
+# Python virtual environments and caches
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Python packaging
+build/
+dist/
+*.egg-info/
+
+# .NET build output and user settings
+**/bin/
+**/obj/
+*.user
+*.suo
+
+# Editors and operating systems
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+Desktop.ini

@@ -1,0 +1,13 @@
+version: "1.0"
+name: tool-call-rate-limiting
+description: Governance policy for the Agent Framework rate-limiting demo.
+terms: []
+
+defaults:
+  action: allow
+
+rate_limit:
+  tool_name: web_search
+  max_calls: 4
+  time_window: 120
+  per_agent: true
