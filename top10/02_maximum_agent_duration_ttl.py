@@ -188,29 +188,32 @@ def main() -> None:
     )
     console.print(f"[dim]Deployment:[/dim] {deployment_name}\n")
 
-    async def run_demo() -> list[tuple[int, str, str]]:
-        rows: list[tuple[int, str, str]] = []
-        kills_before = kill_switch.total_kills
-        response = await agent.run(
+    async def run_demo() -> list[tuple[int, str, str, str]]:
+        rows: list[tuple[int, str, str, str]] = []
+        prompt = (
             "Attempt 1: answer in one short sentence about runtime governance."
         )
-        status = (
-            "TIMED OUT"
-            if kill_switch.total_kills > kills_before
-            else "COMPLETED"
-        )
-        rows.append((1, status, str(response)))
-
         kills_before = kill_switch.total_kills
-        response = await agent.run(
-            "Attempt 2: call the slow_operation tool exactly once and report its result."
-        )
+        response = await agent.run(prompt)
         status = (
             "TIMED OUT"
             if kill_switch.total_kills > kills_before
             else "COMPLETED"
         )
-        rows.append((2, status, str(response)))
+        rows.append((1, prompt, status, str(response)))
+
+        prompt = (
+            "Attempt 2: call the slow_operation tool exactly once and report "
+            "its result."
+        )
+        kills_before = kill_switch.total_kills
+        response = await agent.run(prompt)
+        status = (
+            "TIMED OUT"
+            if kill_switch.total_kills > kills_before
+            else "COMPLETED"
+        )
+        rows.append((2, prompt, status, str(response)))
         return rows
 
     rows = asyncio.run(run_demo())
@@ -220,12 +223,14 @@ def main() -> None:
         show_lines=True,
     )
     attempts.add_column("Attempt", justify="right")
+    attempts.add_column("Input prompt")
     attempts.add_column("Result", justify="center")
     attempts.add_column("Agent response")
-    for attempt_number, status, response in rows:
+    for attempt_number, prompt, status, response in rows:
         color = "green" if status == "COMPLETED" else "red"
         attempts.add_row(
             str(attempt_number),
+            prompt,
             f"[bold {color}]{status}[/bold {color}]",
             response,
         )
