@@ -6,6 +6,9 @@ import warnings
 from pathlib import Path
 
 import yaml
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
 
 
 warnings.filterwarnings(
@@ -80,41 +83,111 @@ def redact_sensitive_text(text: str, placeholder: str) -> str:
     return redacted
 
 
+def add_decision_row(
+    table: Table,
+    *,
+    stage: str,
+    label: DataLabel,
+    allowed: bool,
+    reason: str,
+) -> None:
+    """Add one color-coded governance decision to the output table."""
+    decision = (
+        "[bold green]ALLOW[/bold green]"
+        if allowed
+        else "[bold red]DENY[/bold red]"
+    )
+    classification_color = {
+        DataClassification.PUBLIC: "green",
+        DataClassification.INTERNAL: "cyan",
+        DataClassification.CONFIDENTIAL: "yellow",
+        DataClassification.RESTRICTED: "red",
+        DataClassification.TOP_SECRET: "bold red",
+    }[label.classification]
+    categories = ", ".join(label.categories) or "-"
+    table.add_row(
+        stage,
+        decision,
+        f"[{classification_color}]{label.classification.name}"
+        f"[/{classification_color}]",
+        categories,
+        reason,
+    )
+
+
 def main() -> None:
     """Demonstrate classify, deny, redact, reclassify, and allow."""
+    console = Console()
     evaluator, agent_id, placeholder = load_egress_policy()
     outbound_text = (
         "Create a ticket for Jane, SSN 123-45-6789, "
         "api_key=abcdef1234567890."
     )
 
+    console.print(
+        Panel.fit(
+            "[bold cyan]Sensitive Data Egress Governance[/bold cyan]\n"
+            "Classify -> Deny -> Redact -> Reclassify -> Allow",
+            border_style="cyan",
+        )
+    )
+    console.print(f"[dim]Policy:[/dim] {POLICY_PATH}")
+    console.print(f"[dim]Agent:[/dim]  {agent_id}\n")
+    console.print(
+        Panel(
+            outbound_text,
+            title="[bold red]Original outbound payload (unsafe)[/bold red]",
+            border_style="red",
+        )
+    )
+
+    decisions = Table(
+        title="Egress decisions",
+        header_style="bold magenta",
+        show_lines=True,
+    )
+    decisions.add_column("Stage", style="bold")
+    decisions.add_column("Decision", justify="center")
+    decisions.add_column("Classification")
+    decisions.add_column("Categories")
+    decisions.add_column("Reason")
+
     # Evaluate the original payload without logging its sensitive contents.
     original_label = classify_sensitive_text(outbound_text)
     original_decision = evaluator.evaluate(agent_id, original_label)
-    print(
-        "original: "
-        f"allowed={original_decision.allowed}, "
-        f"classification={original_label.classification.name}, "
-        f"categories={original_label.categories}, "
-        f"reason={original_decision.reason}"
+    add_decision_row(
+        decisions,
+        stage="Original",
+        label=original_label,
+        allowed=original_decision.allowed,
+        reason=original_decision.reason,
     )
 
     if original_decision.allowed:
-        print("no redaction required")
+        console.print(decisions)
+        console.print("[bold green]No redaction required.[/bold green]")
         return
 
     # Redaction changes the data label, so evaluate the sanitized payload again.
     safe_text = redact_sensitive_text(outbound_text, placeholder)
     safe_label = classify_sensitive_text(safe_text)
     safe_decision = evaluator.evaluate(agent_id, safe_label)
-    print(
-        "redacted: "
-        f"allowed={safe_decision.allowed}, "
-        f"classification={safe_label.classification.name}, "
-        f"categories={safe_label.categories}, "
-        f"reason={safe_decision.reason}"
+    add_decision_row(
+        decisions,
+        stage="Redacted",
+        label=safe_label,
+        allowed=safe_decision.allowed,
+        reason=safe_decision.reason,
     )
-    print(f"safe outbound text: {safe_text}")
+
+    console.print(decisions)
+    console.print(
+        Panel(
+            safe_text,
+            title="[bold green]Safe outbound payload[/bold green]",
+            border_style="green" if safe_decision.allowed else "red",
+        )
+    )
 
 
 if __name__ == "__main__":

@@ -8,6 +8,9 @@ import warnings
 from pathlib import Path
 
 import yaml
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
 
 
 # Hide preview warnings so the sample output focuses on governance decisions.
@@ -66,6 +69,7 @@ def load_rate_limit_config() -> tuple[str, int, float, bool]:
 
 def main() -> None:
     """Create the governed agent and demonstrate its tool-call limit."""
+    console = Console()
     load_dotenv()
     endpoint = os.environ["AZURE_OPENAI_ENDPOINT"]
     deployment_name = os.environ["AZURE_OPENAI_DEPLOYMENT_NAME"]
@@ -84,10 +88,12 @@ def main() -> None:
 
     def web_search(query: str) -> str:
         """Represent the external tool protected by the rate-limit policy."""
-        print(f"\033[32m  web_search executed with query: {query}\033[0m")
+        tool_events.append("EXECUTED")
+        console.print(f"[green]  web_search executed:[/green] {query}")
         return f"results for {query}"
 
     rate_limited_tool, max_calls, time_window, per_agent = load_rate_limit_config()
+    tool_events: list[str] = []
     # AGT enforces max_calls within time_window. When per_agent is true,
     # each agent identity receives an independent token bucket.
     limiter = RateLimiter(
@@ -110,8 +116,11 @@ def main() -> None:
             # A denied call never reaches the tool; return a governed result to
             # the agent instead.
             if not limiter.allow(AGENT_DID):
+                tool_events.append("BLOCKED")
                 context.result = "Blocked by AGT tool rate limiter"
-                print(f"\033[31m  {tool_name} blocked by AGT tool rate limiter\033[0m")
+                console.print(
+                    f"[bold red]  {tool_name} blocked by AGT rate limiter[/bold red]"
+                )
                 return
 
             await call_next()
@@ -120,31 +129,86 @@ def main() -> None:
     agent = Agent(
         client=chat_client,
         name="rate-limited-research-agent",
-        instructions="You are a research agent. Use web_search only when allowed by governance.",
-        tools=[FunctionTool(name="web_search", description="Search trusted sources", func=web_search)],
+        instructions=(
+            "You are a research agent. Use web_search only when allowed "
+            "by governance."
+        ),
+        tools=[
+            FunctionTool(
+                name="web_search",
+                description="Search trusted sources",
+                func=web_search,
+            )
+        ],
         middleware=[ToolRateLimitMiddleware()],
     )
 
-    print(f"agent framework agent: {agent.name} ({agent.id})")
-    print(f"policy directory: {POLICY_DIR}")
-    print(f"rate limit: {rate_limited_tool} > {max_calls} calls per {time_window:g} seconds")
-    print(f"azure openai deployment: {deployment_name}")
+    console.print(
+        Panel.fit(
+            "[bold cyan]Tool-Call Rate Limiting[/bold cyan]\n"
+            "Allow -> Consume Budget -> Block",
+            border_style="cyan",
+        )
+    )
+    console.print(f"[dim]Agent:[/dim]      {agent.name} ({agent.id})")
+    console.print(f"[dim]Policy:[/dim]     {POLICY_PATH}")
+    console.print(
+        f"[dim]Limit:[/dim]      {max_calls} calls per "
+        f"{time_window:g} seconds"
+    )
+    console.print(f"[dim]Deployment:[/dim] {deployment_name}\n")
 
     async def run_agent_attempt(call_number: int):
         """Ask the agent to invoke the governed tool once."""
         return await agent.run(
-            f"Attempt {call_number}: call the web_search tool exactly once with query 'AGT runtime governance'. "
+            f"Attempt {call_number}: call the web_search tool exactly once "
+            "with query 'AGT runtime governance'. "
             "Then answer in one short sentence."
         )
 
     # The YAML policy allows three immediate calls, so later attempts are blocked.
+    rows: list[tuple[int, str, str]] = []
     for attempt_number in range(1, 6):
+        event_count = len(tool_events)
         response = asyncio.run(run_agent_attempt(attempt_number))
-        print(f"attempt {attempt_number}: agent response: {response}")
+        event = (
+            tool_events[-1]
+            if len(tool_events) > event_count
+            else "NO TOOL CALL"
+        )
+        rows.append((attempt_number, event, str(response)))
+
+    attempts = Table(
+        title="Governed tool-call attempts",
+        header_style="bold magenta",
+        show_lines=True,
+    )
+    attempts.add_column("Attempt", justify="right")
+    attempts.add_column("Tool decision", justify="center")
+    attempts.add_column("Agent response")
+    for attempt_number, event, response in rows:
+        color = {
+            "EXECUTED": "green",
+            "BLOCKED": "red",
+            "NO TOOL CALL": "yellow",
+        }[event]
+        attempts.add_row(
+            str(attempt_number),
+            f"[bold {color}]{event}[/bold {color}]",
+            response,
+        )
+    console.print(attempts)
 
     # check() observes the bucket without consuming another call.
     status = limiter.check(AGENT_DID)
-    print(f"summary: remaining_calls={status.remaining_calls}, wait_seconds={status.wait_seconds:.2f}")
+    console.print(
+        Panel(
+            f"[bold]Remaining calls:[/bold] {status.remaining_calls}\n"
+            f"[bold]Wait for next token:[/bold] {status.wait_seconds:.2f}s",
+            title="[bold cyan]Rate-limit summary[/bold cyan]",
+            border_style="cyan",
+        )
+    )
 
 
 if __name__ == "__main__":

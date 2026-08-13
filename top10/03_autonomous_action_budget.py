@@ -8,6 +8,9 @@ import warnings
 from pathlib import Path
 
 import yaml
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
 
 
 # Hide preview warnings so the sample output focuses on governance decisions.
@@ -64,10 +67,12 @@ class ActionBudgetMiddleware(FunctionMiddleware):
         governed_tool: str,
         tracker: BudgetTracker,
         exceeded_message: str,
+        console: Console,
     ) -> None:
         self.governed_tool = governed_tool
         self.tracker = tracker
         self.exceeded_message = exceeded_message
+        self.console = console
 
     async def process(self, context, call_next) -> None:
         tool_name = context.function.name
@@ -84,8 +89,8 @@ class ActionBudgetMiddleware(FunctionMiddleware):
             return
 
         reason = ", ".join(self.tracker.exceeded_reasons())
-        print(
-            f"  {tool_name} blocked at attempt "
+        self.console.print(
+            f"[bold red]  {tool_name} blocked[/bold red] at attempt "
             f"{self.tracker.tool_calls_used}: {reason}"
         )
         context.result = (
@@ -96,6 +101,7 @@ class ActionBudgetMiddleware(FunctionMiddleware):
 
 def main() -> None:
     """Create the governed agent and demonstrate its autonomous action budget."""
+    console = Console()
     load_dotenv()
     endpoint = os.environ["AZURE_OPENAI_ENDPOINT"]
     deployment_name = os.environ["AZURE_OPENAI_DEPLOYMENT_NAME"]
@@ -114,9 +120,11 @@ def main() -> None:
     )
 
     def expense_action(action: str) -> str:
-        print(f"  expense_action executed: {action}")
+        executed_actions.append(action)
+        console.print(f"[green]  expense_action executed:[/green] {action}")
         return f"completed {action}"
 
+    executed_actions: list[str] = []
     agent = Agent(
         client=chat_client,
         name="budget-governed-expense-agent",
@@ -136,16 +144,25 @@ def main() -> None:
                 governed_tool=governed_tool,
                 tracker=tracker,
                 exceeded_message=exceeded_message,
+                console=console,
             )
         ],
     )
 
-    print(f"agent framework agent: {agent.name} ({agent.id})")
-    print(f"policy file: {POLICY_PATH}")
-    print(f"action budget: {max_tool_calls}")
-    print(f"azure openai deployment: {deployment_name}")
+    console.print(
+        Panel.fit(
+            "[bold cyan]Autonomous Action Budget[/bold cyan]\n"
+            "Attempt Action -> Consume Budget -> Require Approval",
+            border_style="cyan",
+        )
+    )
+    console.print(f"[dim]Agent:[/dim]      {agent.name} ({agent.id})")
+    console.print(f"[dim]Policy:[/dim]     {POLICY_PATH}")
+    console.print(f"[dim]Budget:[/dim]     {max_tool_calls} tool calls")
+    console.print(f"[dim]Deployment:[/dim] {deployment_name}\n")
 
-    async def run_demo() -> None:
+    async def run_demo() -> list[tuple[int, str, str, str]]:
+        rows: list[tuple[int, str, str, str]] = []
         actions = [
             "read_invoice",
             "classify_expense",
@@ -154,19 +171,48 @@ def main() -> None:
             "notify_user",
         ]
         for action_number, action in enumerate(actions, start=1):
+            execution_count = len(executed_actions)
             response = await agent.run(
                 f"Action {action_number}: call expense_action exactly once with action '{action}'. "
                 "Then answer in one short sentence."
             )
-            print(f"action {action_number}: agent response: {response}")
+            decision = (
+                "EXECUTED"
+                if len(executed_actions) > execution_count
+                else "BLOCKED"
+            )
+            rows.append((action_number, action, decision, str(response)))
+        return rows
 
-    asyncio.run(run_demo())
+    rows = asyncio.run(run_demo())
+    results = Table(
+        title="Autonomous action attempts",
+        header_style="bold magenta",
+        show_lines=True,
+    )
+    results.add_column("#", justify="right")
+    results.add_column("Action")
+    results.add_column("Decision", justify="center")
+    results.add_column("Agent response")
+    for action_number, action, decision, response in rows:
+        color = "green" if decision == "EXECUTED" else "red"
+        results.add_row(
+            str(action_number),
+            action,
+            f"[bold {color}]{decision}[/bold {color}]",
+            response,
+        )
+    console.print(results)
+
     remaining_calls = tracker.remaining()["tool_calls"]
-    print(
-        "summary: "
-        f"actions_attempted={tracker.tool_calls_used}, "
-        f"budget={max_tool_calls}, "
-        f"remaining={max(0, int(remaining_calls or 0))}"
+    console.print(
+        Panel(
+            f"[bold]Attempts:[/bold] {tracker.tool_calls_used}\n"
+            f"[bold]Budget:[/bold] {max_tool_calls}\n"
+            f"[bold]Remaining:[/bold] {max(0, int(remaining_calls or 0))}",
+            title="[bold cyan]Action-budget summary[/bold cyan]",
+            border_style="cyan",
+        )
     )
 
 

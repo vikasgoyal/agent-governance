@@ -9,6 +9,9 @@ from pathlib import Path
 from threading import Event
 
 import yaml
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
 
 
 # Hide preview warnings so the sample output focuses on governance decisions.
@@ -69,12 +72,14 @@ class ExecutionTimeoutMiddleware(AgentMiddleware):
         max_duration_seconds: float,
         kill_switch: KillSwitch,
         termination_requested: Event,
+        console: Console,
         agent_did: str = AGENT_DID,
         session_id: str = SESSION_ID,
     ) -> None:
         self.max_duration_seconds = max_duration_seconds
         self.kill_switch = kill_switch
         self.termination_requested = termination_requested
+        self.console = console
         self.agent_did = agent_did
         self.session_id = session_id
 
@@ -101,10 +106,10 @@ class ExecutionTimeoutMiddleware(AgentMiddleware):
                 reason=KillReason.SESSION_TIMEOUT,
                 details=details,
             )
-            print(
-                "\033[31m  execution timed out "
+            self.console.print(
+                "[bold red]  execution timed out[/bold red] "
                 f"kill_id={kill_result.kill_id} "
-                f"terminated={kill_result.terminated}\033[0m"
+                f"terminated={kill_result.terminated}"
             )
             context.result = AgentResponse(
                 messages=[
@@ -121,6 +126,7 @@ class ExecutionTimeoutMiddleware(AgentMiddleware):
 
 def main() -> None:
     """Create the governed agent and demonstrate one timed-out execution."""
+    console = Console()
     load_dotenv()
     endpoint = os.environ["AZURE_OPENAI_ENDPOINT"]
     deployment_name = os.environ["AZURE_OPENAI_DEPLOYMENT_NAME"]
@@ -136,6 +142,7 @@ def main() -> None:
         max_duration_seconds=max_duration_seconds,
         kill_switch=kill_switch,
         termination_requested=termination_requested,
+        console=console,
     )
 
     chat_client = OpenAIChatClient(
@@ -147,7 +154,9 @@ def main() -> None:
     async def slow_operation() -> str:
         """Represent governed work that intentionally exceeds the limit."""
         delay_seconds = max_duration_seconds + 5
-        print(f"  slow_operation started ({delay_seconds:g}s)")
+        console.print(
+            f"[yellow]  slow_operation started ({delay_seconds:g}s)[/yellow]"
+        )
         await asyncio.sleep(delay_seconds)
         return "slow operation completed"
 
@@ -165,28 +174,71 @@ def main() -> None:
         middleware=[timeout_middleware],
     )
 
-    print(f"agent framework agent: {agent.name} ({agent.id})")
-    print(f"policy file: {POLICY_PATH}")
-    print(f"maximum execution duration: {max_duration_seconds:g}s")
-    print(f"azure openai deployment: {deployment_name}")
+    console.print(
+        Panel.fit(
+            "[bold cyan]Maximum Agent Execution Duration[/bold cyan]\n"
+            "Start -> Enforce Deadline -> Kill and Audit",
+            border_style="cyan",
+        )
+    )
+    console.print(f"[dim]Agent:[/dim]      {agent.name} ({agent.id})")
+    console.print(f"[dim]Policy:[/dim]     {POLICY_PATH}")
+    console.print(
+        f"[dim]Deadline:[/dim]   {max_duration_seconds:g} seconds"
+    )
+    console.print(f"[dim]Deployment:[/dim] {deployment_name}\n")
 
-    async def run_demo() -> None:
+    async def run_demo() -> list[tuple[int, str, str]]:
+        rows: list[tuple[int, str, str]] = []
+        kills_before = kill_switch.total_kills
         response = await agent.run(
             "Attempt 1: answer in one short sentence about runtime governance."
         )
-        print(f"attempt 1: agent response: {response}")
+        status = (
+            "TIMED OUT"
+            if kill_switch.total_kills > kills_before
+            else "COMPLETED"
+        )
+        rows.append((1, status, str(response)))
 
+        kills_before = kill_switch.total_kills
         response = await agent.run(
             "Attempt 2: call the slow_operation tool exactly once and report its result."
         )
-        print(f"attempt 2: agent response: {response}")
+        status = (
+            "TIMED OUT"
+            if kill_switch.total_kills > kills_before
+            else "COMPLETED"
+        )
+        rows.append((2, status, str(response)))
+        return rows
 
-    asyncio.run(run_demo())
+    rows = asyncio.run(run_demo())
+    attempts = Table(
+        title="Execution attempts",
+        header_style="bold magenta",
+        show_lines=True,
+    )
+    attempts.add_column("Attempt", justify="right")
+    attempts.add_column("Result", justify="center")
+    attempts.add_column("Agent response")
+    for attempt_number, status, response in rows:
+        color = "green" if status == "COMPLETED" else "red"
+        attempts.add_row(
+            str(attempt_number),
+            f"[bold {color}]{status}[/bold {color}]",
+            response,
+        )
+    console.print(attempts)
 
-    print(
-        "summary: "
-        f"kills={kill_switch.total_kills}, "
-        f"termination_requested={termination_requested.is_set()}"
+    console.print(
+        Panel(
+            f"[bold]Kill records:[/bold] {kill_switch.total_kills}\n"
+            "[bold]Termination callback invoked:[/bold] "
+            f"{termination_requested.is_set()}",
+            title="[bold cyan]Timeout summary[/bold cyan]",
+            border_style="cyan",
+        )
     )
 
 
