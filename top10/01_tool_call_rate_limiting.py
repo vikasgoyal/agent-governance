@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 import warnings
 from pathlib import Path
 
@@ -86,14 +87,18 @@ def main() -> None:
         base_url=f"{endpoint.rstrip('/')}/openai/v1/",
     )
 
+    def record_tool_event(decision: str) -> None:
+        tool_events.append((decision, time.monotonic() - demonstration_started_at))
+
     def web_search(query: str) -> str:
         """Represent the external tool protected by the rate-limit policy."""
-        tool_events.append("EXECUTED")
+        record_tool_event("EXECUTED")
         console.print(f"[green]  web_search executed:[/green] {query}")
         return f"results for {query}"
 
     rate_limited_tool, max_calls, time_window, per_agent = load_rate_limit_config()
-    tool_events: list[str] = []
+    tool_events: list[tuple[str, float]] = []
+    demonstration_started_at = time.monotonic()
     # AGT enforces max_calls within time_window. When per_agent is true,
     # each agent identity receives an independent token bucket.
     limiter = RateLimiter(
@@ -116,7 +121,7 @@ def main() -> None:
             # A denied call never reaches the tool; return a governed result to
             # the agent instead.
             if not limiter.allow(AGENT_DID):
-                tool_events.append("BLOCKED")
+                record_tool_event("BLOCKED")
                 context.result = "Blocked by AGT tool rate limiter"
                 console.print(
                     f"[bold red]  {tool_name} blocked by AGT rate limiter[/bold red]"
@@ -156,6 +161,10 @@ def main() -> None:
         f"[dim]Limit:[/dim]      {max_calls} calls per "
         f"{time_window:g} seconds"
     )
+    console.print(
+        f"[dim]Refill:[/dim]     1 call every "
+        f"{time_window / max_calls:g} seconds (continuous token bucket)"
+    )
     console.print(f"[dim]Deployment:[/dim] {deployment_name}\n")
 
     async def run_agent_attempt(call_number: int):
@@ -166,17 +175,18 @@ def main() -> None:
             "Then answer in one short sentence."
         )
 
-    # The YAML policy allows three immediate calls, so later attempts are blocked.
-    rows: list[tuple[int, str, str]] = []
-    for attempt_number in range(1, 6):
+    # Three calls are initially available. Sequential model turns may take long
+    # enough for the continuously refilling bucket to grant another call.
+    rows: list[tuple[int, float, str, str]] = []
+    for attempt_number in range(1, 10):
         event_count = len(tool_events)
         response = asyncio.run(run_agent_attempt(attempt_number))
-        event = (
+        event, decision_elapsed = (
             tool_events[-1]
             if len(tool_events) > event_count
-            else "NO TOOL CALL"
+            else ("NO TOOL CALL", time.monotonic() - demonstration_started_at)
         )
-        rows.append((attempt_number, event, str(response)))
+        rows.append((attempt_number, decision_elapsed, event, str(response)))
 
     attempts = Table(
         title="Governed tool-call attempts",
@@ -184,9 +194,10 @@ def main() -> None:
         show_lines=True,
     )
     attempts.add_column("Attempt", justify="right")
+    attempts.add_column("Decision at", justify="right")
     attempts.add_column("Tool decision", justify="center")
     attempts.add_column("Agent response")
-    for attempt_number, event, response in rows:
+    for attempt_number, decision_elapsed, event, response in rows:
         color = {
             "EXECUTED": "green",
             "BLOCKED": "red",
@@ -194,6 +205,7 @@ def main() -> None:
         }[event]
         attempts.add_row(
             str(attempt_number),
+            f"+{decision_elapsed:.2f}s",
             f"[bold {color}]{event}[/bold {color}]",
             response,
         )

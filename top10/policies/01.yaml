@@ -8,6 +8,6 @@ defaults:
 
 rate_limit:
   tool_name: web_search
-  max_calls: 4
-  time_window: 120
+  max_calls: 3
+  time_window: 200
   per_agent: true
